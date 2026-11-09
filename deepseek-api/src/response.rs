@@ -1,59 +1,85 @@
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 use std::fmt;
 
-use crate::json_stream::JsonStream;
-
-/// Represents different types of models available in the deep seek.
-#[derive(Default, Clone, Serialize, Deserialize, Debug, PartialEq)]
-pub enum ModelType {
-    /// Default model type for chat-based interactions.
-    #[default]
-    #[serde(rename = "deepseek-chat")]
-    DeepSeekChat,
-
-    /// Model type for reasoning-based interactions.
-    #[serde(rename = "deepseek-reasoner")]
-    DeepSeekReasoner,
+/// A model identifier that also accepts future and custom provider models.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ModelId(pub String);
+impl ModelId {
+    pub const FLASH: &'static str = "deepseek-flash";
+    pub const V4_PRO: &'static str = "deepseek-v4-pro";
+    pub fn new(id: impl Into<String>) -> Self {
+        Self(id.into())
+    }
 }
-
-impl ModelType {
-    /// Retrieves the limit information for the model.
-    ///
-    /// Returns a tuple containing:
-    /// - `context_len`: Maximum context length unit KB.
-    /// - `thought_chain_len`: Optional maximum thought chain length.
-    /// - `output_len`: Maximum output length.
-    pub fn get_limit_info(&self) -> (u32, Option<u32>, u32) {
-        match self {
-            ModelType::DeepSeekChat => (64, None, 8),
-            ModelType::DeepSeekReasoner => (64, Some(32), 8),
-        }
+impl From<&str> for ModelId {
+    fn from(id: &str) -> Self {
+        Self::new(id)
+    }
+}
+impl From<String> for ModelId {
+    fn from(id: String) -> Self {
+        Self(id)
+    }
+}
+impl fmt::Display for ModelId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
     }
 }
 
-impl fmt::Display for ModelType {
-    /// Formats the model type into a human-readable string.
-    ///
-    /// The output includes context length, thought chain length (if applicable),
-    /// output length, and pricing information.
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let (context_len, thought_chain_len, output_len) = self.get_limit_info();
+/// Convenient model names, with the original identifiers retained for compatibility.
+#[derive(Default, Clone, Serialize, Deserialize, Debug, PartialEq)]
+pub enum ModelType {
+    #[default]
+    #[serde(rename = "deepseek-flash")]
+    DeepSeekFlash,
+    #[serde(rename = "deepseek-v4-pro")]
+    DeepSeekV4Pro,
+    #[serde(rename = "deepseek-chat")]
+    DeepSeekChat,
+    #[serde(rename = "deepseek-reasoner")]
+    DeepSeekReasoner,
+    #[serde(untagged)]
+    Custom(String),
+}
+impl From<ModelId> for ModelType {
+    fn from(id: ModelId) -> Self {
+        Self::Custom(id.0)
+    }
+}
+impl From<&str> for ModelType {
+    fn from(id: &str) -> Self {
+        Self::Custom(id.into())
+    }
+}
+impl From<String> for ModelType {
+    fn from(id: String) -> Self {
+        Self::Custom(id)
+    }
+}
+impl ModelType {
+    /// Historical limits in Ki tokens. Custom model limits must be checked with the provider.
+    #[deprecated(
+        note = "Model limits vary by provider and mode; consult current API documentation"
+    )]
+    pub fn get_limit_info(&self) -> (u32, Option<u32>, u32) {
         match self {
-            ModelType::DeepSeekChat => {
-                write!(
-                    f,
-                    "DeepSeekChat: Context Length = {}K, Max Output Length = {}K",
-                    context_len, output_len
-                )
-            }
-            ModelType::DeepSeekReasoner => {
-                write!(
-                    f,
-                    "DeepSeekReasoner: Context Length = {}K, Max Thought Chain Length = {:?}K, Max Output Length = {}K",
-                    context_len, thought_chain_len, output_len
-                )
-            }
+            Self::DeepSeekChat => (64, None, 8),
+            Self::DeepSeekReasoner => (64, Some(32), 8),
+            _ => (0, None, 0),
         }
+    }
+}
+impl fmt::Display for ModelType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::DeepSeekFlash => "deepseek-flash",
+            Self::DeepSeekV4Pro => "deepseek-v4-pro",
+            Self::DeepSeekChat => "deepseek-chat",
+            Self::DeepSeekReasoner => "deepseek-reasoner",
+            Self::Custom(id) => id,
+        })
     }
 }
 
@@ -123,13 +149,16 @@ pub struct ToolCall {
 #[derive(Clone, Serialize, Deserialize, Debug, Default)]
 pub struct AssistantMessage {
     /// Content of the message.
+    #[serde(default, deserialize_with = "null_string")]
     pub content: String,
     /// Optional reasoning content.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_content: Option<String>,
     /// Optional list of tool calls.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<Vec<ToolCall>>,
     pub name: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub prefix: bool,
 }
 
@@ -190,13 +219,23 @@ pub enum FinishReason {
     /// Process finished due to insufficient system resources.
     #[serde(rename = "insufficient_system_resource")]
     InsufficientSystemResource,
+    #[serde(rename = "aborted")]
+    Aborted,
+    #[serde(other)]
+    Unknown,
 }
 
 /// Wrapper for log probability information.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LogProbWrap {
     /// List of log probabilities.
+    #[serde(default, deserialize_with = "null_vec")]
     pub content: Vec<LogProb>,
+    /// FIM token log probability metadata.
+    pub text_offset: Option<Vec<u32>>,
+    pub token_logprobs: Option<Vec<Option<f64>>>,
+    pub tokens: Option<Vec<String>>,
+    pub top_logprobs: Option<Vec<serde_json::Value>>,
 }
 
 /// Represents log probability information for a token.
@@ -227,6 +266,10 @@ pub struct TopLogProb {
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct Choice {
     /// Reason for finishing the process.
+    #[serde(
+        default = "unknown_finish_reason",
+        deserialize_with = "null_finish_reason"
+    )]
     pub finish_reason: FinishReason,
     /// Index of the choice.
     pub index: usize,
@@ -246,13 +289,21 @@ pub struct Usage {
     /// Number of prompt tokens used.
     pub prompt_tokens: u64,
     /// Number of prompt cache hit tokens.
+    #[serde(default)]
     pub prompt_cache_hit_tokens: u64,
     /// Number of prompt cache miss tokens.
+    #[serde(default)]
     pub prompt_cache_miss_tokens: u64,
     /// Total number of tokens used.
     pub total_tokens: u64,
     /// Details of completion tokens used.
     pub completion_tokens_details: Option<CompletionTokensDetails>,
+    pub prompt_tokens_details: Option<PromptTokensDetails>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PromptTokensDetails {
+    pub cached_tokens: u64,
 }
 
 /// Details of completion tokens used.
@@ -291,6 +342,21 @@ pub struct Delta {
     /// Role of the delta change sender.
     #[serde(default)]
     pub role: String,
+    pub tool_calls: Option<Vec<ToolCallDelta>>,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct ToolCallDelta {
+    pub index: usize,
+    pub id: Option<String>,
+    #[serde(rename = "type")]
+    pub tool_type: Option<String>,
+    pub function: Option<FunctionDelta>,
+}
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct FunctionDelta {
+    pub name: Option<String>,
+    pub arguments: Option<String>,
 }
 
 /// Represents a choice stream with its associated delta change.
@@ -330,53 +396,35 @@ pub struct ChatCompletionStream<T> {
     pub system_fingerprint: String,
     /// Type of the object.
     pub object: String,
+    pub usage: Option<Usage>,
 }
 
-/// Represents a chat response which can either be a full response or a stream of items.
-///
-/// This enum is generic over the response type `RESP` and the item type `ITEM`.
-///
-/// # Variants
-///
-/// - `Full(RESP)`: Represents a complete response of type `RESP`.
-/// - `Stream(JsonStream<ITEM>)`: Represents a stream of items of type `ITEM`.
-///
-/// # Type Parameters
-///
-/// - `RESP`: The type of the full response. Must implement `DeserializeOwned`.
-/// - `ITEM`: The type of the items in the stream. Must implement `DeserializeOwned`.
-///
-/// # Methods
-///
-/// - `must_response(self) -> RESP`: Consumes the enum and returns the full response if it is the `Full` variant. Panics if it is the `Stream` variant.
-/// - `must_stream(self) -> JsonStream<ITEM>`: Consumes the enum and returns the stream if it is the `Stream` variant. Panics if it is the `Full` variant.
-pub enum ChatResponse<RESP, ITEM>
-where
-    RESP: DeserializeOwned,
-    ITEM: DeserializeOwned,
-{
-    Full(RESP),
-    Stream(JsonStream<ITEM>),
+#[cfg(not(feature = "is_sync"))]
+pub use crate::async_impl::chat_response::ChatResponse;
+#[cfg(feature = "is_sync")]
+pub use crate::sync_impl::chat_response::ChatResponse;
+
+fn null_string<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    Ok(Option::<String>::deserialize(d)?.unwrap_or_default())
+}
+fn null_vec<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(
+    d: D,
+) -> Result<Vec<T>, D::Error> {
+    Ok(Option::<Vec<T>>::deserialize(d)?.unwrap_or_default())
 }
 
-impl<RESP, ITEM> ChatResponse<RESP, ITEM>
-where
-    RESP: DeserializeOwned,
-    ITEM: DeserializeOwned,
-{
-    pub fn must_response(self) -> RESP {
-        match self {
-            ChatResponse::Full(resp) => resp,
-            ChatResponse::Stream(_) => panic!("Expected Full variant, found Stream"),
-        }
+impl AssistantMessage {
+    /// Deserialize a JSON-mode answer into an application type.
+    pub fn json<T: serde::de::DeserializeOwned>(&self) -> crate::Result<T> {
+        Ok(serde_json::from_str(&self.content)?)
     }
+}
 
-    pub fn must_stream(self) -> JsonStream<ITEM> {
-        match self {
-            ChatResponse::Stream(stream) => stream,
-            ChatResponse::Full(_) => panic!("Expected Stream variant, found Full"),
-        }
-    }
+fn unknown_finish_reason() -> FinishReason {
+    FinishReason::Unknown
+}
+fn null_finish_reason<'de, D: serde::Deserializer<'de>>(d: D) -> Result<FinishReason, D::Error> {
+    Ok(Option::<FinishReason>::deserialize(d)?.unwrap_or(FinishReason::Unknown))
 }
 
 #[cfg(test)]

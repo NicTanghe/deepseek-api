@@ -1,5 +1,5 @@
 use crate::response::AssistantMessage;
-use anyhow::{anyhow, Ok, Result};
+use anyhow::{anyhow, Result};
 use schemars::schema::SchemaObject;
 use serde::{Deserialize, Serialize};
 
@@ -92,7 +92,7 @@ impl ResponseFormat {
     }
 }
 
-/// Represents the maximum number of tokens with a value between 1 and 8192.
+/// Represents the maximum number of tokens with a value between 1 and 393216.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MaxToken(pub u32);
 
@@ -105,10 +105,12 @@ impl MaxToken {
     ///
     /// # Errors
     ///
-    /// Returns an error if the value is not between 1 and 8192.
+    /// Returns an error if the value is not between 1 and 393216.
     pub fn new(v: u32) -> Result<Self> {
-        if !(1..=8192).contains(&v) {
-            return Err(anyhow!("Max token must be between 1 and 8192.".to_string()));
+        if !(1..=393216).contains(&v) {
+            return Err(anyhow!(
+                "Max token must be between 1 and 393216.".to_string()
+            ));
         }
         Ok(MaxToken(v))
     }
@@ -123,6 +125,7 @@ impl Default for MaxToken {
 
 /// Represents the stopping criteria for the completion.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
 pub enum Stop {
     Single(String),
     Multiple(Vec<String>),
@@ -174,7 +177,7 @@ impl Default for Temperature {
     }
 }
 
-/// Represents the top-p value with a value between 0.0 and 1.0.
+/// Represents the top-p value with a value greater than 0.0 and at most 1.0.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TopP(pub f32);
 
@@ -187,10 +190,12 @@ impl TopP {
     ///
     /// # Errors
     ///
-    /// Returns an error if the value is not between 0.0 and 1.0.
+    /// Returns an error if the value is not greater than 0.0 and at most 1.0.
     pub fn new(v: f32) -> Result<Self> {
-        if !(0.0..=1.0).contains(&v) {
-            return Err(anyhow!("TopP value must be between 0and 2.".to_string()));
+        if !v.is_finite() || v <= 0.0 || v > 1.0 {
+            return Err(anyhow!(
+                "TopP must be greater than 0 and at most 1.".to_string()
+            ));
         }
         Ok(TopP(v))
     }
@@ -253,6 +258,7 @@ pub struct ChatCompletionNamedToolChoice {
 
 /// Represents the choice of tool.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
 pub enum ToolChoice {
     ChatCompletion(ChatCompletionToolChoice),
     ChatCompletionNamed(ChatCompletionNamedToolChoice),
@@ -301,6 +307,8 @@ pub enum MessageRequest {
     Assistant(AssistantMessage),
     #[serde(rename = "tool")]
     Tool(ToolMessageRequest),
+    #[serde(untagged)]
+    Multimodal(MultimodalMessageRequest),
 }
 
 impl MessageRequest {
@@ -334,6 +342,17 @@ impl MessageRequest {
             MessageRequest::User(req) => req.content.as_str(),
             MessageRequest::Assistant(req) => req.content.as_str(),
             MessageRequest::Tool(req) => req.content.as_str(),
+            MessageRequest::Multimodal(req) => req
+                .content
+                .iter()
+                .find_map(|p| {
+                    if let ContentPart::Text { text } = p {
+                        Some(text.as_str())
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or(""),
         }
     }
 }
@@ -342,6 +361,7 @@ impl MessageRequest {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SystemMessageRequest {
     pub content: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
 }
 
@@ -376,6 +396,7 @@ impl SystemMessageRequest {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct UserMessageRequest {
     pub content: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
 }
 
@@ -425,5 +446,132 @@ impl ToolMessageRequest {
             content: msg.to_string(),
             tool_call_id: tool_call_id.to_string(),
         }
+    }
+}
+
+/// Thinking configuration for modern chat models.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum Thinking {
+    Enabled,
+    Disabled,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReasoningEffort {
+    None,
+    Low,
+    High,
+    Max,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ImageDetail {
+    Low,
+    High,
+    Original,
+    Auto,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ImageUrl {
+    pub url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<ImageDetail>,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ContentPart {
+    Text {
+        text: String,
+    },
+    ImageUrl {
+        image_url: ImageUrl,
+    },
+    File {
+        #[serde(flatten)]
+        source: FileSource,
+    },
+}
+impl ContentPart {
+    pub fn text(text: impl Into<String>) -> Self {
+        Self::Text { text: text.into() }
+    }
+    pub fn image(url: impl Into<String>) -> Self {
+        Self::ImageUrl {
+            image_url: ImageUrl {
+                url: url.into(),
+                detail: None,
+            },
+        }
+    }
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MultimodalMessageRequest {
+    pub role: String,
+    pub content: Vec<ContentPart>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
+}
+impl MessageRequest {
+    pub fn user_parts(content: Vec<ContentPart>) -> Self {
+        Self::Multimodal(MultimodalMessageRequest {
+            role: "user".into(),
+            content,
+            tool_call_id: None,
+        })
+    }
+    pub fn tool_parts(id: impl Into<String>, content: Vec<ContentPart>) -> Self {
+        Self::Multimodal(MultimodalMessageRequest {
+            role: "tool".into(),
+            content,
+            tool_call_id: Some(id.into()),
+        })
+    }
+}
+impl ToolObject {
+    pub fn function(
+        name: impl Into<String>,
+        description: impl Into<String>,
+        parameters: SchemaObject,
+    ) -> Self {
+        Self {
+            tool_type: ToolType::Function,
+            function: Function {
+                name: name.into(),
+                description: description.into(),
+                parameters,
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum FileSource {
+    Id {
+        file_id: String,
+    },
+    Data {
+        file_data: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        filename: Option<String>,
+    },
+}
+
+impl MessageRequest {
+    pub fn validate(&self) -> crate::Result<()> {
+        if let Self::Multimodal(message) = self {
+            if !matches!(message.role.as_str(), "user" | "tool") || message.content.is_empty() {
+                return Err(crate::Error::Configuration(
+                    "multimodal messages require a user/tool role and content".into(),
+                ));
+            }
+            if message.role == "tool" && message.tool_call_id.as_deref().is_none_or(str::is_empty) {
+                return Err(crate::Error::Configuration(
+                    "tool messages require tool_call_id".into(),
+                ));
+            }
+        }
+        Ok(())
     }
 }

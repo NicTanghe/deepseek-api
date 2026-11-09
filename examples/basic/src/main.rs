@@ -1,65 +1,54 @@
 use anyhow::Result;
 use clap::Parser;
-use deepseek_api::request::MessageRequest;
-use deepseek_api::response::ModelType;
-use deepseek_api::{CompletionsRequestBuilder, DeepSeekClientBuilder, RequestBuilder};
+use deepseek_api::{asynchronous::DeepSeekClientBuilder, request::MessageRequest};
 use std::io::{stdin, stdout, Write};
-use std::vec;
-
-#[derive(Parser, Debug)]
-#[command(version, about, long_about = None)]
+#[derive(Parser)]
 struct Args {
-    #[clap(long)]
-    pub api_key: String,
+    #[arg(long, env = "DEEPSEEK_API_KEY", hide_env_values = true)]
+    api_key: String,
 }
-
 #[tokio::main]
 async fn main() -> Result<()> {
-    let args = Args::parse();
-    let client = DeepSeekClientBuilder::new(args.api_key.clone()).build()?;
+    let client = DeepSeekClientBuilder::new(Args::parse().api_key).build()?;
+    let mut history = Vec::new();
     loop {
-        let mut buffer = String::new();
-
-        print!(">");
-        let _ = stdout().flush();
-        // `read_line` returns `Result` of bytes read
-        stdin().read_line(&mut buffer)?;
-
-        let mut history = vec![];
-
-        match buffer.trim_end() {
-            "" => {
-                println!("Input you question.");
+        print!("> ");
+        stdout().flush()?;
+        let mut input = String::new();
+        if stdin().read_line(&mut input)? == 0 {
+            break;
+        }
+        match input.trim() {
+            "" => continue,
+            "/exit" => break,
+            "/clear" => {
+                history.clear();
+                continue;
             }
-            "exit" => {
-                break;
+            "/models" => {
+                println!("{:?}", client.models().await?);
+                continue;
             }
-            "balance" => {
-                let balances = client.balance().await?;
-                println!("balances {:?}", balances);
+            "/balance" => {
+                println!("{:?}", client.balance().await?);
+                continue;
             }
-            "models" => {
-                let models = client.models().await?;
-                println!("models {:?}", models);
-            }
-            word => {
-                let resp = CompletionsRequestBuilder::new(&[MessageRequest::user(word)])
-                    .use_model(ModelType::DeepSeekChat)
-                    .do_request(&client)
-                    .await?
-                    .must_response();
-
-                let mut resp_words = vec![];
-                for msg in resp.choices.iter() {
-                    history.push(msg.message.as_ref().expect("message exit").clone());
-                    resp_words.push(msg.message.as_ref().expect("message").content.clone());
-                }
-
-                for msg in resp_words.iter() {
-                    msg.split("\n").for_each(|x| println!("{}", x));
+            question => history.push(MessageRequest::user(question)),
+        }
+        match client.chat(&history).await {
+            Ok(response) => {
+                for choice in response.choices {
+                    if let Some(message) = choice.message {
+                        println!("{}", message.content);
+                        history.push(MessageRequest::Assistant(message));
+                    }
                 }
             }
-        };
+            Err(error) => {
+                history.pop();
+                eprintln!("{error}");
+            }
+        }
     }
     Ok(())
 }

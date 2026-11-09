@@ -44,7 +44,7 @@ impl ChatHistory {
             Layout::horizontal([Constraint::Min(1), Constraint::Length(1)]).split(inner_area);
         let (content_area, scrollbar_area) = (layout[0], layout[1]);
 
-        let content_width = content_area.width.saturating_sub(1) as usize;
+        let content_width = usize::from(content_area.width.saturating_sub(1)).max(1);
         let visible_height = content_area.height as usize;
 
         let total_lines = Self::calculate_total_lines(msg_contents, content_width);

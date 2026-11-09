@@ -1,39 +1,19 @@
 use anyhow::Result;
 use clap::Parser;
-use deepseek_api::{request::MessageRequest, response::ModelType};
-use deepseek_api::{CompletionsRequestBuilder, DeepSeekClientBuilder, RequestBuilder};
-use std::vec;
-
-#[derive(Parser, Debug)]
-#[command(version, about, long_about = None)]
+use deepseek_api::{blocking::DeepSeekClientBuilder, request::MessageRequest};
+#[derive(Parser)]
 struct Args {
-    #[clap(long)]
-    pub api_key: String,
+    #[arg(long, env = "DEEPSEEK_API_KEY", hide_env_values = true)]
+    api_key: String,
 }
-
 fn main() -> Result<()> {
-    let args = Args::parse();
-
-    let client = DeepSeekClientBuilder::new(args.api_key.clone())
-        .with_timeout(300)
-        .build()?;
-
-    let mut history = vec![];
-    let resp = CompletionsRequestBuilder::new(&[MessageRequest::user("hello world")])
-        .use_model(ModelType::DeepSeekReasoner)
-        .do_request(&client)?
-        .must_response();
-
-    let mut resp_words = vec![];
-    for msg in resp.choices.iter() {
-        history.push(MessageRequest::Assistant(
-            msg.message.as_ref().expect("message exit").clone(),
-        ));
-        resp_words.push(msg.message.as_ref().expect("message").content.clone());
+    let client = DeepSeekClientBuilder::new(Args::parse().api_key).build()?;
+    let mut history = vec![MessageRequest::user("Hello!")];
+    for choice in client.chat(&history)?.choices {
+        if let Some(message) = choice.message {
+            println!("{}", message.content);
+            history.push(MessageRequest::Assistant(message));
+        }
     }
-    for msg in resp_words.iter() {
-        msg.split("\n").for_each(|x| println!("{}", x));
-    }
-
     Ok(())
 }
