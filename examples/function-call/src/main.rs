@@ -1,85 +1,60 @@
-use anyhow::Result;
+use anyhow::{Result, bail};
 use clap::Parser;
-use deepseek_api::request::MessageRequest;
-use deepseek_api::request::{Function, ToolMessageRequest, ToolObject, ToolType};
-use deepseek_api::response::FinishReason;
-use deepseek_api::{CompletionsRequestBuilder, DeepSeekClientBuilder, RequestBuilder};
-use schemars::schema::SchemaObject;
-use std::vec;
-
-#[derive(Parser, Debug)]
-#[command(version, about, long_about = None)]
+use deepseek_api::{
+    CompletionsRequestBuilder,
+    asynchronous::DeepSeekClientBuilder,
+    request::{MessageRequest, ToolMessageRequest, ToolObject},
+};
+use serde::Deserialize;
+#[derive(Parser)]
 struct Args {
-    #[clap(long)]
-    pub api_key: String,
+    #[arg(long, env = "DEEPSEEK_API_KEY", hide_env_values = true)]
+    api_key: String,
 }
-
-/// This example demonstrates how to use function calling in the DeepSeek API.
-/// It defines a function to get the weather of a location, and then calls that function
-/// based on the user's input. The function is defined using JSON Schema, and the API
-/// will automatically parse the user's input to match the function's parameters.
-/// More detail can refer to https://api-docs.deepseek.com/guides/function_calling
+#[derive(Deserialize)]
+struct WeatherArgs {
+    location: String,
+}
 #[tokio::main]
 async fn main() -> Result<()> {
-    let args = Args::parse();
-    let client = DeepSeekClientBuilder::new(args.api_key.clone()).build()?;
-    let parameters: SchemaObject = serde_json::from_str(
-        r#"{
-        "type": "object",
-        "properties": {
-            "location": {
-                "type": "string",
-                "description": "The location to get the weather for"
-            },
-            "unit": {
-                "type": "string",
-                "enum": ["celsius", "fahrenheit"],
-                "description": "The unit of temperature"
-            }
-        },
-        "required": ["location"]
+    let client = DeepSeekClientBuilder::new(Args::parse().api_key).build()?;
+    let tools = [ToolObject::function(
+        "get_weather",
+        "Get weather for a location",
+        serde_json::from_str(
+            r#"{
+        "type":"object","properties":{"location":{"type":"string"}},"required":["location"]
     }"#,
-    )?;
-
-    let tool_object = ToolObject {
-        tool_type: ToolType::Function,
-        function: Function {
-            name: "get_weather".to_string(),
-            description: "Get weather of an location, the user shoud supply a location first"
-                .to_string(),
-            parameters,
-        },
-    };
-
-    let tool_objects: Vec<ToolObject> = vec![tool_object];
-    let mut messages = vec![MessageRequest::user("How's the weather in Hangzhou?")];
-    let resp = CompletionsRequestBuilder::new(&messages)
-        .tools(&tool_objects)
-        .do_request(&client)
-        .await?
-        .must_response();
-    let mut id = String::new();
-    if resp.choices[0].finish_reason == FinishReason::ToolCalls {
-        if let Some(msg) = &resp.choices[0].message {
-            if let Some(tool) = &msg.tool_calls {
-                id = tool[0].id.clone();
-                println!("Function id: {}", id);
-                println!("Function name: {}", tool[0].function.name);
-                println!("Function parameters: {:?}", tool[0].function.arguments);
+        )?,
+    )];
+    let mut messages = vec![MessageRequest::user("How is the weather in Hangzhou?")];
+    // Bound the tool loop so a model cannot call tools indefinitely.
+    for _ in 0..4 {
+        let response = client
+            .send_completion_request(CompletionsRequestBuilder::new(&messages).tools(&tools))
+            .await?
+            .into_response()?;
+        let Some(message) = response.choices.into_iter().find_map(|c| c.message) else {
+            bail!("no assistant message returned");
+        };
+        let calls = message.tool_calls.clone().unwrap_or_default();
+        println!("{}", message.content);
+        messages.push(MessageRequest::Assistant(message));
+        if calls.is_empty() {
+            return Ok(());
+        }
+        for call in calls {
+            if call.function.name != "get_weather" {
+                bail!("unsupported tool {}", call.function.name);
             }
-            messages.push(MessageRequest::Assistant(msg.clone()));
+            let args: WeatherArgs = serde_json::from_str(&call.function.arguments)?;
+            // Replace this demo fixture with a real weather service. Validate before execution.
+            let output = serde_json::json!({"location":args.location,"temperature_celsius":24,"source":"demo fixture"});
+            messages.push(MessageRequest::Tool(ToolMessageRequest::new(
+                &output.to_string(),
+                &call.id,
+            )));
         }
     }
-
-    messages.push(MessageRequest::Tool(ToolMessageRequest::new("24℃", &id)));
-    let resp = CompletionsRequestBuilder::new(&messages)
-        .tools(&tool_objects)
-        .do_request(&client)
-        .await?
-        .must_response();
-    println!(
-        "Reply with my function: {:?}",
-        resp.choices[0].message.as_ref().unwrap().content
-    );
-    Ok(())
+    bail!("tool call limit reached")
 }

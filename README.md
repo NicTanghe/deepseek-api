@@ -1,247 +1,118 @@
 # DeepSeek API SDK
 
-DeepSeek API SDK is a Rust client library for interacting with the DeepSeek service. It provides a high-performance, safe, and easy-to-use interface for making API calls to DeepSeek, enabling seamless integration into your Rust applications.
+Rust SDK and terminal chat client for DeepSeek. Includes async and blocking clients, Chat Completions, thinking controls, vision input, tool calls, JSON output, streaming usage, Responses, image files, and web Search/Fetch for RAG.
 
----
+This branch prepares **0.2.0-alpha.1**. It is a prerelease with migration changes; see [MIGRATION.md](MIGRATION.md) and [CHANGELOG.md](CHANGELOG.md). The SDK requires Rust 1.85 or newer; the CLI/workspace requires Rust 1.88.
 
-## Overview & Features
+## Quick start
 
-The DeepSeek API SDK simplifies communication with the DeepSeek backend by offering an intuitive API design that allows you to easily send requests and process responses. Built with Rust, the SDK leverages the language’s performance and memory safety guarantees to help you build robust and scalable applications. Key benefits include:
+For a checkout of this repository:
 
-- ✅ **High Performance:** Utilizes Rust’s concurrency and low-level optimizations for fast API interactions.
-- ✅ **Memory Safety:** Leverages Rust’s strong type system and ownership model to minimize runtime errors.
-- ✅ **Intuitive Interface:** Simplifies API usage with clear methods and comprehensive error handling.
-- ✅ **Async & Blocking Support:** Offers both asynchronous (e.g., using Tokio) and synchronous (blocking) interfaces to suit different application needs.
-
----
-
-## Use Cli
-This project comes with a command-line tool `ds-cli`, which provides a similar user experience to the web version. You can use it to interact with DeepSeek.
-
-```bash
-cargo install ds-cli
-ds-cli --api-key <your api key>
-```
-![Image](https://github.com/user-attachments/assets/28b58387-f56c-4583-bc94-7afb54392edb)
-
-
-## Use in you code
-
-Add the DeepSeek API SDK to your project by including it in your `Cargo.toml`:
-
-```bash
-cargo add deepseek-api
+```powershell
+$env:DEEPSEEK_API_KEY = "your-key"
+cargo run -p basic
 ```
 
-## Usage
+To depend on this checkout from another project:
 
-The DeepSeek API SDK supports both asynchronous and synchronous usage patterns in Rust, giving you flexibility based on your runtime and application needs. You can also leverage function calling features for advanced interactions like calling custom-defined tools.
-
-### Asynchronous Example  (Recommended for Most Use Cases)
-```rust
-use anyhow::Result;
-use clap::Parser;
-use deepseek_api::request::MessageRequest;
-use deepseek_api::response::ModelType;
-use deepseek_api::{CompletionsRequestBuilder, DeepSeekClientBuilder, RequestBuilder};
-use std::io::{stdin, stdout, Write};
-use std::vec;
-
-#[derive(Parser, Debug)]
-#[command(version, about, long_about = None)]
-struct Args {
-    #[clap(long)]
-    pub api_key: String,
-}
-
-#[tokio::main]
-async fn main() -> Result<()> {
-    let args = Args::parse();
-    let client = DeepSeekClientBuilder::new(args.api_key.clone()).build()?;
-    loop {
-        let mut buffer = String::new();
-
-        print!(">");
-        let _ = stdout().flush();
-        // `read_line` returns `Result` of bytes read
-        stdin().read_line(&mut buffer)?;
-
-        let mut history = vec![];
-
-        match buffer.trim_end() {
-            "" => {
-                println!("Input you question.");
-            }
-            "exit" => {
-                break;
-            }
-            "balance" => {
-                let balances = client.balance().await?;
-                println!("balances {:?}", balances);
-            }
-            "models" => {
-                let models = client.models().await?;
-                println!("models {:?}", models);
-            }
-            word => {
-                let resp = CompletionsRequestBuilder::new(&[MessageRequest::user(word)])
-                    .use_model(ModelType::DeepSeekChat)
-                    .do_request(&client)
-                    .await?
-                    .must_response();
-
-                let mut resp_words = vec![];
-                for msg in resp.choices.iter() {
-                    history.push(msg.message.as_ref().expect("message exit").clone());
-                    resp_words.push(msg.message.as_ref().expect("message").content.clone());
-                }
-
-                for msg in resp_words.iter() {
-                    msg.split("\n").for_each(|x| println!("{}", x));
-                }
-            }
-        };
-    }
-    Ok(())
-}
+```toml
+[dependencies]
+deepseek-api = { path = "../deepseek-api/deepseek-api" }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
-### Synchronous Example  (Requires Feature Flag)
-To use the synchronous version, disable default features and enable is_sync:
-```examples
-deepseek-api = { version = "xx", default-features = false, features = ["is_sync"] }
-```
-
-```rs
-use anyhow::Result;
-use clap::Parser;
-use deepseek_api::{request::MessageRequest, response::ModelType};
-use deepseek_api::{CompletionsRequestBuilder, DeepSeekClientBuilder, RequestBuilder};
-use std::vec;
-
-#[derive(Parser, Debug)]
-#[command(version, about, long_about = None)]
-struct Args {
-    #[clap(long)]
-    pub api_key: String,
-}
-
-fn main() -> Result<()> {
-    let args = Args::parse();
-
-    let client = DeepSeekClientBuilder::new(args.api_key.clone())
-        .with_timeout(300)
-        .build()?;
-
-    let mut history = vec![];
-    let resp = CompletionsRequestBuilder::new(&[MessageRequest::user("hello world")])
-        .use_model(ModelType::DeepSeekReasoner)
-        .do_request(&client)?
-        .must_response();
-
-    let mut resp_words = vec![];
-    for msg in resp.choices.iter() {
-        history.push(MessageRequest::Assistant(
-            msg.message.as_ref().expect("message exit").clone(),
-        ));
-        resp_words.push(msg.message.as_ref().expect("message").content.clone());
-    }
-    for msg in resp_words.iter() {
-        msg.split("\n").for_each(|x| println!("{}", x));
-    }
-
-    Ok(())
-}
-```
-
-### Function Calling
-
-Use the function calling interface to define and invoke tools via the API.
+After the prerelease is published, the path can be replaced with `version = "0.2.0-alpha.1"`.
 
 ```rust
-use anyhow::Result;
-use clap::Parser;
-use deepseek_api::request::MessageRequest;
-use deepseek_api::request::{Function, ToolMessageRequest, ToolObject, ToolType};
-use deepseek_api::response::FinishReason;
-use deepseek_api::{CompletionsRequestBuilder, DeepSeekClientBuilder, RequestBuilder};
-use schemars::schema::SchemaObject;
-use std::vec;
+use deepseek_api::{asynchronous::DeepSeekClient, request::MessageRequest};
 
-#[derive(Parser, Debug)]
-#[command(version, about, long_about = None)]
-struct Args {
-    #[clap(long)]
-    pub api_key: String,
-}
-
-/// This example demonstrates how to use function calling in the DeepSeek API.
-/// It defines a function to get the weather of a location, and then calls that function
-/// based on the user's input. The function is defined using JSON Schema, and the API
-/// will automatically parse the user's input to match the function's parameters.
-/// More detail can refer to https://api-docs.deepseek.com/guides/function_calling
 #[tokio::main]
-async fn main() -> Result<()> {
-    let args = Args::parse();
-    let client = DeepSeekClientBuilder::new(args.api_key.clone()).build()?;
-    let parameters: SchemaObject = serde_json::from_str(
-        r#"{
-        "type": "object",
-        "properties": {
-            "location": {
-                "type": "string",
-                "description": "The location to get the weather for"
-            },
-            "unit": {
-                "type": "string",
-                "enum": ["celsius", "fahrenheit"],
-                "description": "The unit of temperature"
-            }
-        },
-        "required": ["location"]
-    }"#,
-    )?;
-
-    let tool_object = ToolObject {
-        tool_type: ToolType::Function,
-        function: Function {
-            name: "get_weather".to_string(),
-            description: "Get weather of an location, the user shoud supply a location first"
-                .to_string(),
-            parameters,
-        },
-    };
-
-    let tool_objects: Vec<ToolObject> = vec![tool_object];
-    let mut messages = vec![MessageRequest::user("How's the weather in Hangzhou?")];
-    let resp = CompletionsRequestBuilder::new(&messages)
-        .tools(&tool_objects)
-        .do_request(&client)
-        .await?
-        .must_response();
-    let mut id = String::new();
-    if resp.choices[0].finish_reason == FinishReason::ToolCalls {
-        if let Some(msg) = &resp.choices[0].message {
-            if let Some(tool) = &msg.tool_calls {
-                id = tool[0].id.clone();
-                println!("Function id: {}", id);
-                println!("Function name: {}", tool[0].function.name);
-                println!("Function parameters: {:?}", tool[0].function.arguments);
-            }
-            messages.push(MessageRequest::Assistant(msg.clone()));
+async fn main() -> deepseek_api::Result<()> {
+    let client = DeepSeekClient::from_env()?;
+    let response = client.chat(&[MessageRequest::user("Hello!")]).await?;
+    for choice in response.choices {
+        if let Some(message) = choice.message {
+            println!("{}", message.content);
         }
     }
-
-    messages.push(MessageRequest::Tool(ToolMessageRequest::new("24℃", &id)));
-    let resp = CompletionsRequestBuilder::new(&messages)
-        .tools(&tool_objects)
-        .do_request(&client)
-        .await?
-        .must_response();
-    println!(
-        "Reply with my function: {:?}",
-        resp.choices[0].message.as_ref().unwrap().content
-    );
     Ok(())
 }
 ```
+
+Conversation state belongs to your application. Retain user and assistant messages and send the full history on each turn. The [basic example](examples/basic/src/main.rs) demonstrates recovery and multi-turn chat.
+
+## Configuration and errors
+
+Use `DeepSeekClient::builder(key)` or `DeepSeekClientBuilder::new(key)`. Builders accept an API key or read `DEEPSEEK_API_KEY` through `Default` / `from_env()`.
+
+Defaults are a 300-second request timeout, a 10-second connect timeout, and two retries for read-only operations. Configure `with_timeout`, `without_timeout`, `with_connect_timeout`, `with_host`, `with_headers`, `with_http_client`, and `with_retry_policy`. An injected HTTP client retains its own timeout, redirect, TLS and proxy configuration. Default transports reject redirects. Empty keys, malformed headers and invalid API base URLs fail locally.
+
+Direct client methods return `deepseek_api::Result<T>`. Match `Error::Api { status, error, request_id, retry_after }`, `Error::Transport`, `Error::Json`, `Error::Stream`, or `Error::Configuration`. `is_timeout()`, `status()` and `is_retryable()` support recovery. Enable the optional `tracing` feature for method/status/retry diagnostics without logging request bodies or credentials. Legacy builder `do_request()` converts into `anyhow::Error`; downcast to `deepseek_api::Error` when necessary.
+
+GET operations and Search/Fetch retry HTTP 408, 429 and 5xx, plus connection failures and timeouts before receiving a response. Retries use bounded exponential delay and honor numeric `Retry-After`; a delay above the configured maximum returns the error instead. Chat, FIM, Responses, uploads and deletions are never automatically replayed. Failures while consuming a body or stream are reported without retrying. Dropping an async request future or either stream cancels further reading; blocking calls run until completion or timeout.
+
+## Models, thinking, tools and JSON
+
+`ModelType::DeepSeekFlash` is the new default; `DeepSeekV4Pro` is also available. Original `DeepSeekChat` and `DeepSeekReasoner` variants retain their wire names. Pass any string or `ModelId` to `.use_model(...)` for future/custom models. Availability remains a server decision.
+
+Use `CompletionsRequestBuilder` for `.thinking(Thinking::Enabled)`, `.reasoning_effort(ReasoningEffort::High)`, sampling, tools and `.response_format(ResponseType::Json)`. Chat token limits accept 1..=393216; effective limits depend on the model/context. In JSON mode, instruct the model to return JSON and parse with `AssistantMessage::json::<T>()`.
+
+`ToolObject::function(...)` constructs function definitions. `.strict_tools(true)` selects the beta chat endpoint and adds `strict` to tool schemas. The [function call example](examples/function-call/src/main.rs) validates arguments and bounds the tool loop. Tools are executed by your application.
+
+## Streaming and Responses
+
+Call `.stream(true)` and `.into_stream()?`, then use `StreamExt::next().await` for async or iterate for blocking. `ChatCompletionStream` includes `usage`, content/reasoning deltas and tool call fragments. Accumulate tool argument strings by index before parsing them. SSE supports comments, CRLF, multiline data, arbitrary byte boundaries, malformed-event errors and terminal detection. Unexpected EOF is an error. Streams stay finished after termination.
+
+`client.responses(&ResponseRequest)` supports full responses and semantic `ResponseEvent`s. Use `response.output_text()` / `.json::<T>()`. Flexible JSON input, tools and options preserve provider extensions. Inspect the terminal response status/error and usage: `response.failed` and `response.incomplete` are terminal events, not transport failures. Responses are stateless; pass prior input/output items back on each turn. `web_search` is a Responses server tool supported by `deepseek-v4-pro`; standalone retrieval uses the separate Search/Fetch methods below.
+
+## Vision and files
+
+Build image messages with `MessageRequest::user_parts` and `ContentPart::text` / `ContentPart::image`. File content parts use `FileSource::Id` or `FileSource::Data`. Tool outputs can also contain image parts. `upload_file`, `list_files`, `retrieve_file`, and `delete_file` handle image storage and pagination, with optional upload expiration. The provider Files API accepts JPEG, PNG, GIF and WebP images; it does not ingest arbitrary documents or create a vector database. Upload size is limited to 64 MiB. See the [modern example](examples/modern/src/main.rs).
+
+## Search, Fetch and RAG
+
+```rust
+use deepseek_api::search::{SearchRequest, FetchRequest};
+# async fn retrieve(client: &deepseek_api::asynchronous::DeepSeekClient) -> deepseek_api::Result<()> {
+let results = client.search(&SearchRequest::new("DeepSeek site:github.com")
+    .count(5).need_content(true)).await?;
+for result in results.results {
+    println!("{}: {}", result.title, result.url);
+}
+let page = client.fetch(&FetchRequest::new("https://example.com")).await?;
+println!("{}", page.content);
+# Ok(()) }
+```
+
+Search calls `/v1/tools/search`; Fetch calls `/v1/tools/fetch`, using the same bearer key. Query operators are passed through unchanged. Search validates Unicode query length (1..=128) and count (1..=50); nullable source metadata and empty results are preserved. Fetch validates HTTP(S) URLs, the 8192-character limit and absence of credentials. Both root and `/v1` API base URLs work.
+
+Run the [RAG example](examples/rag/src/main.rs): `cargo run -p rag -- "your question"`. It retrieves sources, falls back to Fetch, bounds source text, and asks for URL citations. Retrieved pages are untrusted data and may contain prompt injection. Search/Fetch incur separate provider charges; consult [DeepSeek's current guide](https://api-docs.deepseek.com/guides/search/) for billing and rate limits.
+
+## Blocking and feature combinations
+
+```toml
+deepseek-api = { path = "../deepseek-api/deepseek-api", default-features = false, features = ["blocking"] }
+```
+
+Use `deepseek_api::blocking::DeepSeekClient` with the same methods, without `.await`. Async types remain available under `deepseek_api::asynchronous`. `is_async` / `is_sync` remain compatibility feature names; `async` / `blocking` are aliases. With `is_sync`, legacy root client/stream aliases and builder `do_request()` select blocking. Explicit namespaces work together regardless of feature unification. No default features still supports async transport.
+
+## Terminal CLI
+
+```powershell
+cargo run -p ds-cli -- --model deepseek-flash
+cargo run -p ds-cli -- --history ./chat-history.json
+```
+
+Configuration: `DEEPSEEK_API_KEY`, `DEEPSEEK_MODEL`, `DEEPSEEK_BASE_URL`, or the corresponding flags. History is saved only when `--history` is supplied; that file contains conversation and reasoning text. Commands: `/help`, `/models`, `/balance`, `/model <id>`, `/clear`, `/search <query>`, `/fetch <url>`, `/exit`. Search/Fetch add retrieved context to the current session. Tab completes unique slash commands or moves focus, Enter activates/sends, Ctrl+J inserts a newline, Esc exits. The Deep Think button toggles thinking on the selected model. Request failures leave the UI usable and remove incomplete turns from API history.
+
+## Development
+
+```text
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo test --workspace --all-features
+cargo test -p deepseek-api --no-default-features
+cargo test -p deepseek-api --no-default-features --features blocking
+```
+
+Tests use local HTTP servers and require no credentials or paid calls. CI checks Linux/Windows, the feature matrix, documentation, dependency advisories and secrets. See [the implementation notes](docs/implementation.md) for API references and release requirements.

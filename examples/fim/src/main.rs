@@ -1,11 +1,11 @@
 use anyhow::Result;
 use clap::Parser;
-use deepseek_api::{DeepSeekClientBuilder, FMICompletionsRequestBuilder, RequestBuilder};
+use deepseek_api::{asynchronous::DeepSeekClientBuilder, FMICompletionsRequestBuilder};
 
-#[derive(Parser, Debug)]
+#[derive(Parser)]
 #[command(version, about, long_about = None)]
 struct Args {
-    #[clap(long)]
+    #[arg(long, env = "DEEPSEEK_API_KEY", hide_env_values = true)]
     pub api_key: String,
 }
 
@@ -15,25 +15,22 @@ async fn main() -> Result<()> {
     let client = DeepSeekClientBuilder::new(args.api_key.clone()).build()?;
 
     let balances = client.balance().await?;
-    println!("balances {:?}", balances);
+    println!("balances {balances:?}");
 
     let models = client.models().await?;
-    println!("models {:?}", models);
+    println!("models {models:?}");
 
-    let resp = FMICompletionsRequestBuilder::new("def fib(a):", "    return fib(a-1) + fib(a-2)")
-        .max_tokens(128)?
-        .do_request(&client)
+    let resp = client
+        .send_completion_request(
+            FMICompletionsRequestBuilder::new("def fib(a):", "    return fib(a-1) + fib(a-2)")
+                .max_tokens(128)?,
+        )
         .await?
-        .must_response();
-    println!(
-        "resp {:?}",
-        resp.choices
-            .first()
-            .as_ref()
-            .unwrap()
-            .text
-            .as_ref()
-            .unwrap()
-    );
+        .into_response()?;
+    for choice in resp.choices {
+        if let Some(text) = choice.text {
+            println!("{text}");
+        }
+    }
     Ok(())
 }

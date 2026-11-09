@@ -1,69 +1,68 @@
-
-name: Basic
-
+name: Rust
 on:
   push:
-    branches: [ "main" ]
-    tags:
-      - 'v*' 
+    branches: [main]
   pull_request:
-    branches: [ "main" ]
-
+  workflow_dispatch:
+permissions:
+  contents: read
 jobs:
-  build:
-
-    runs-on: ubuntu-latest
-
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        features: [default, minimal, blocking, all]
+    runs-on: ${{ matrix.os }}
     steps:
-    - uses: actions/checkout@v4
-    - name: Linelint
-      uses: fernandrone/linelint@master
-      id: linelint
-
-    - name: Check signed commits in PR
-      if: |
-        github.event_name == 'pull_request' || 
-        github.event_name == 'pull_request_target'
-      uses: 1Password/check-signed-commits-action@v1
-
-    - name: Install rust toolchain
-      uses: actions-rust-lang/setup-rust-toolchain@v1
-      with:
-        components: clippy,rustfmt
-    - name: Foramt check
-      run: |
-        cargo fmt --all -- --check
-
-    - name: Run Clippy
-      run: |
-       cargo clippy -p deepseek-api --all-targets --all-features
-       cargo clippy -p basic --all-targets --all-features
-       cargo clippy -p chat-stream --all-targets --all-features
-       cargo clippy -p fim --all-targets --all-features
-       cargo clippy -p sync-basic --all-targets --all-features
-       cargo clippy -p ds-cli --all-targets --all-features
-       cargo clippy -p function-call --all-targets --all-features
-       cargo clippy -p deep-think --all-targets --all-features
-
-    - name: Build
-      run: |
-       cargo build -p deepseek-api --all-targets
-       cargo build -p basic --all-targets
-       cargo build -p chat-stream --all-targets
-       cargo build -p fim --all-targets
-       cargo build -p sync-basic --all-targets
-       cargo build -p ds-cli --all-targets
-       cargo build -p function-call --all-targets
-       cargo build -p deep-think --all-targets
-
-    - name: Run tests
-      run: |
-        cargo test -p deepseek-api --verbose
-        cargo test -p deepseek-api --verbose  --features=is_sync
-
-    - name: Publish crates
-      if: startsWith(github.ref, 'refs/tags/v')
-      run: |
-        echo "Publishing crates"
-        cargo publish -p deepseek-api --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        cargo publish -p ds-cli --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.85.0
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Default async
+        if: matrix.features == 'default'
+        run: cargo test -p deepseek-api --locked
+      - name: No default features
+        if: matrix.features == 'minimal'
+        run: cargo test -p deepseek-api --locked --no-default-features
+      - name: Blocking only
+        if: matrix.features == 'blocking'
+        run: cargo test -p deepseek-api --locked --no-default-features --features blocking
+      - uses: dtolnay/rust-toolchain@1.88.0
+        if: matrix.features == 'all'
+        with:
+          components: rustfmt, clippy
+      - name: Format
+        if: matrix.features == 'all'
+        run: |
+          cargo fmt --all -- --check
+          rustfmt --check --edition 2021 deepseek-api/src/client_builder.rs deepseek-api/src/chat_response.rs
+      - name: Entire workspace and both transports
+        if: matrix.features == 'all'
+        run: cargo test --workspace --locked --all-features
+      - name: Lint all targets
+        if: matrix.features == 'all'
+        run: cargo clippy --workspace --locked --all-targets --all-features -- -D warnings
+      - name: Documentation
+        if: matrix.features == 'all'
+        run: cargo doc -p deepseek-api --locked --all-features --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
+  advisories:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo install cargo-audit --locked
+      - run: cargo audit
+  secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
